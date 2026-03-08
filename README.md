@@ -63,7 +63,7 @@ math-mentor/
 
 ### 1) Multimodal Input
 - **Text**: direct problem input.
-- **Image**: OCR via PaddleOCR (Tesseract fallback), editable extraction box.
+- **Image**: equation-aware multi-pass OCR (ROI crops + PaddleOCR/Tesseract/RapidOCR fallback), editable extraction box.
 - **Audio**: Whisper transcription + math phrase normalization + user confirmation.
 
 ### 2) Parser Agent Output
