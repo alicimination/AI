@@ -10,3 +10,4 @@ openai-whisper
 python-dotenv
 numpy
 Pillow
+rapidocr-onnxruntime
