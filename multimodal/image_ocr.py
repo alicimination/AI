@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
@@ -258,6 +259,8 @@ def _pick_best_result(candidates: Sequence[OCRResult]) -> OCRResult:
 
     return best
 
+    w, h = image.size
+    rois = [image]
 
 # ----------------------------------------------------
 # OCR extraction
