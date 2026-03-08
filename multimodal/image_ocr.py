@@ -1,4 +1,4 @@
-"""Image OCR utilities with robust free OCR backends and math-aware extraction."""
+"""Image OCR utilities with robust free OCR backends and fallbacks."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ class OCRResult:
     error: Optional[str] = None
 
 
+# ----------------------------------------------------
+# Optional OCR engine initialization (best-effort)
+# ----------------------------------------------------
 paddle_ocr = None
 paddle_init_error = None
 try:
@@ -49,27 +52,19 @@ except Exception as exc:  # noqa: BLE001
     rapid_init_error = str(exc)
 
 
-def _roi_crops(image: Image.Image) -> List[Image.Image]:
-    """Generate ROIs so equations lower in image are not missed."""
-
-    w, h = image.size
-    rois = [image]
-
-    # lower area where equations are often placed
-    rois.append(image.crop((0, int(0.28 * h), w, h)))
-    # central equation strip
-    rois.append(image.crop((0, int(0.38 * h), w, int(0.9 * h))))
-
-    return rois
-
-
+# ----------------------------------------------------
+# Image preprocessing (improves OCR accuracy)
+# ----------------------------------------------------
 def _preprocess_variants(image: Image.Image) -> List[np.ndarray]:
+    """Generate complementary variants to improve OCR on equations/text."""
+
     gray = ImageOps.grayscale(image)
     base = ImageOps.autocontrast(gray)
     denoised = base.filter(ImageFilter.MedianFilter(size=3))
 
     arr = np.array(denoised)
 
+    # Otsu threshold in pure numpy
     hist, _ = np.histogram(arr.ravel(), bins=256, range=(0, 256))
     total = arr.size
     sum_total = np.dot(np.arange(256), hist)
@@ -97,33 +92,24 @@ def _preprocess_variants(image: Image.Image) -> List[np.ndarray]:
     binary = np.where(arr > threshold, 255, 0).astype(np.uint8)
     inverted = (255 - binary).astype(np.uint8)
 
-    # dilation-like smoothing to reconnect thin math symbols after binarization
-    binary_img = Image.fromarray(binary).filter(ImageFilter.MaxFilter(size=3))
-
+    # Mild upscale helps small-font equations
+    scale = 1.5
     w, h = denoised.size
-    upscaled = denoised.resize((int(w * 1.6), int(h * 1.6)), Image.Resampling.LANCZOS)
+    upscaled = denoised.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
-    return [
+    variants = [
         np.array(base),
         np.array(denoised),
-        np.array(binary_img),
+        binary,
         inverted,
         np.array(upscaled),
     ]
+    return variants
 
 
 def _clean_lines(lines: Sequence[str]) -> List[str]:
     cleaned = [ln.strip() for ln in lines if isinstance(ln, str) and ln.strip()]
     return list(dict.fromkeys(cleaned))
-
-
-def _is_equation_like(text: str) -> bool:
-    if not text:
-        return False
-    operators = sum(ch in "=+-*/^()[]{}" for ch in text)
-    digits = sum(ch.isdigit() for ch in text)
-    variables = sum(ch.isalpha() for ch in text)
-    return operators >= 2 and (digits + variables) >= 3
 
 
 def _quality_score(text: str, confidence: float) -> float:
@@ -132,9 +118,8 @@ def _quality_score(text: str, confidence: float) -> float:
 
     visible_chars = sum(ch.isalnum() or ch in "+-*/=()[]{}^.,:<>" for ch in text)
     density = visible_chars / max(len(text), 1)
-    length_bonus = min(len(text) / 140.0, 1.0)
-    eq_bonus = 0.15 if _is_equation_like(text) else 0.0
-    return (confidence * 0.58) + (density * 0.2) + (length_bonus * 0.07) + eq_bonus
+    length_bonus = min(len(text) / 120.0, 1.0)
+    return (confidence * 0.65) + (density * 0.2) + (length_bonus * 0.15)
 
 
 def _ocr_with_paddle(variants: Sequence[np.ndarray]) -> Optional[OCRResult]:
@@ -172,72 +157,50 @@ def _ocr_with_tesseract(variants: Sequence[np.ndarray]) -> Optional[OCRResult]:
     if pytesseract_mod is None:
         return None
 
-    configs = [
-        "--oem 3 --psm 6",
-        "--oem 3 --psm 7",
-        "--oem 3 --psm 13",
-        "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+-*/=()[]{}^.:, ",
-    ]
-
     best: Optional[OCRResult] = None
     best_score = -1.0
 
+    custom_config = "--oem 3 --psm 6"
+
     for variant in variants:
-        for config in configs:
-            # Build line-wise output (better for equations than word list)
-            lines_by_row: defaultdict[Tuple[int, int, int], List[str]] = defaultdict(list)
-            confs: List[float] = []
+        try:
+            data = pytesseract_mod.image_to_data(
+                variant,
+                output_type=pytesseract_mod.Output.DICT,
+                config=custom_config,
+            )
+        except Exception:  # noqa: BLE001
+            continue
 
+        lines: List[str] = []
+        confs: List[float] = []
+        n = len(data.get("text", []))
+
+        for i in range(n):
+            text = (data["text"][i] or "").strip()
+            conf_raw = data.get("conf", ["-1"])[i]
             try:
-                data = pytesseract_mod.image_to_data(
-                    variant,
-                    output_type=pytesseract_mod.Output.DICT,
-                    config=config,
-                )
-            except Exception:  # noqa: BLE001
-                data = None
+                conf = float(conf_raw)
+            except (TypeError, ValueError):
+                conf = -1.0
 
-            if data:
-                n = len(data.get("text", []))
-                for i in range(n):
-                    token = (data["text"][i] or "").strip()
-                    if not token:
-                        continue
+            if text:
+                lines.append(text)
+                if conf >= 0:
+                    confs.append(conf / 100.0)
 
-                    key = (
-                        int(data.get("block_num", [0])[i]),
-                        int(data.get("par_num", [0])[i]),
-                        int(data.get("line_num", [0])[i]),
-                    )
-                    lines_by_row[key].append(token)
+        lines = _clean_lines(lines)
+        text = "\n".join(lines)
+        confidence = sum(confs) / len(confs) if confs else 0.0
+        score = _quality_score(text, confidence)
 
-                    try:
-                        conf = float(data.get("conf", ["-1"])[i])
-                    except (TypeError, ValueError):
-                        conf = -1.0
-                    if conf >= 0:
-                        confs.append(conf / 100.0)
-
-            line_joined = [" ".join(tokens) for _, tokens in sorted(lines_by_row.items())]
-
-            # Additional plain OCR pass catches some missed math layouts.
-            try:
-                raw_text = pytesseract_mod.image_to_string(variant, config=config)
-            except Exception:  # noqa: BLE001
-                raw_text = ""
-
-            raw_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
-            lines = _clean_lines([*line_joined, *raw_lines])
-
-            text = "\n".join(lines)
-            confidence = sum(confs) / len(confs) if confs else 0.0
-            score = _quality_score(text, confidence)
-
-            if score > best_score:
-                best_score = score
-                best = OCRResult(text=text, confidence=confidence, lines=lines, engine="tesseract")
+        if score > best_score:
+            best_score = score
+            best = OCRResult(text=text, confidence=confidence, lines=lines, engine="tesseract")
 
     return best
+
+
 
 
 def _ocr_with_rapidocr(variants: Sequence[np.ndarray]) -> Optional[OCRResult]:
@@ -253,6 +216,7 @@ def _ocr_with_rapidocr(variants: Sequence[np.ndarray]) -> Optional[OCRResult]:
         confs: List[float] = []
 
         for item in result or []:
+            # format: [box, text, conf]
             if len(item) >= 3:
                 text = str(item[1])
                 try:
@@ -274,26 +238,11 @@ def _ocr_with_rapidocr(variants: Sequence[np.ndarray]) -> Optional[OCRResult]:
 
     return best
 
-
 def _pick_best_result(candidates: Sequence[OCRResult]) -> OCRResult:
     ranked: List[Tuple[float, OCRResult]] = [(_quality_score(c.text, c.confidence), c) for c in candidates]
     ranked.sort(key=lambda x: x[0], reverse=True)
+
     best = ranked[0][1]
-
-    # Preserve equation-like lines from other engines/ROIs if best misses them.
-    eq_lines = []
-    for _, cand in ranked:
-        eq_lines.extend([ln for ln in cand.lines if _is_equation_like(ln)])
-    eq_lines = _clean_lines(eq_lines)
-
-    if eq_lines:
-        merged_lines = _clean_lines([*best.lines, *eq_lines])
-        return OCRResult(
-            text="\n".join(merged_lines),
-            confidence=best.confidence,
-            lines=merged_lines,
-            engine=best.engine,
-        )
 
     if len(ranked) > 1:
         alt = ranked[1][1]
@@ -310,7 +259,12 @@ def _pick_best_result(candidates: Sequence[OCRResult]) -> OCRResult:
 
     return best
 
+    w, h = image.size
+    rois = [image]
 
+# ----------------------------------------------------
+# OCR extraction
+# ----------------------------------------------------
 def extract_text_from_image(uploaded_file) -> OCRResult:
     """Extract text/equations from uploaded image with free OCR backends."""
 
@@ -333,22 +287,20 @@ def extract_text_from_image(uploaded_file) -> OCRResult:
         return OCRResult(text="", confidence=0.0, lines=[], engine="none", error=str(exc))
 
     try:
+        variants = _preprocess_variants(image)
         candidates: List[OCRResult] = []
 
-        for roi in _roi_crops(image):
-            variants = _preprocess_variants(roi)
+        paddle_res = _ocr_with_paddle(variants)
+        if paddle_res and paddle_res.text:
+            candidates.append(paddle_res)
 
-            paddle_res = _ocr_with_paddle(variants)
-            if paddle_res and paddle_res.text:
-                candidates.append(paddle_res)
+        rapid_res = _ocr_with_rapidocr(variants)
+        if rapid_res and rapid_res.text:
+            candidates.append(rapid_res)
 
-            rapid_res = _ocr_with_rapidocr(variants)
-            if rapid_res and rapid_res.text:
-                candidates.append(rapid_res)
-
-            tesseract_res = _ocr_with_tesseract(variants)
-            if tesseract_res and tesseract_res.text:
-                candidates.append(tesseract_res)
+        tesseract_res = _ocr_with_tesseract(variants)
+        if tesseract_res and tesseract_res.text:
+            candidates.append(tesseract_res)
 
         if not candidates:
             init_errors = []
