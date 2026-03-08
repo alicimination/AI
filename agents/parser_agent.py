@@ -35,7 +35,9 @@ class ParserAgent:
         vars_found = sorted(set(re.findall(r"\b[a-zA-Z]\b", cleaned)))
         constraints = self._extract_constraints(cleaned)
         topic = self._detect_topic(cleaned)
-        ambiguous = len(cleaned) < 8 or "?" not in cleaned and "solve" not in cleaned.lower()
+        has_equation = bool(re.search(r"[a-zA-Z0-9\)\]]\s*=\s*[a-zA-Z0-9\(\[]", cleaned))
+        has_solver_intent = any(word in cleaned.lower() for word in ["solve", "find", "roots", "evaluate", "simplify"])
+        ambiguous = len(cleaned) < 8 or (not has_equation and "?" not in cleaned and not has_solver_intent)
 
         return ParsedProblem(
             problem_text=cleaned,

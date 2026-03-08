@@ -22,7 +22,12 @@ class SolverAgent:
     """Produce plan and solution using RAG + symbolic helper."""
 
     def __init__(self):
-        self.retriever = RAGRetriever()
+        try:
+            self.retriever = RAGRetriever()
+            self.retriever_error = None
+        except Exception as exc:  # noqa: BLE001
+            self.retriever = None
+            self.retriever_error = str(exc)
 
     # -------------------------
     # Expression normalization
@@ -36,15 +41,20 @@ class SolverAgent:
         x(x+1) -> x*(x+1)
         """
         expr = expr.replace("^", "**")
+        expr = expr.replace("−", "-")
 
-        # x2 → x**2
-        expr = re.sub(r"x(\d+)", r"x**\1", expr)
+        # x2 → x**2 (single-letter variables)
+        expr = re.sub(r"\b([a-zA-Z])(\d+)\b", r"\1**\2", expr)
 
         # 5x → 5*x
-        expr = re.sub(r"(\d)x", r"\1*x", expr)
+        expr = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", expr)
 
         # x(x+1) → x*(x+1)
-        expr = re.sub(r"x\(", r"x*(", expr)
+        expr = re.sub(r"([a-zA-Z0-9])\(", r"\1*(", expr)
+        # )( -> )*(
+        expr = re.sub(r"\)\(", ")*(", expr)
+
+        expr = re.sub(r"\s+", "", expr)
 
         return expr
 
@@ -64,12 +74,67 @@ class SolverAgent:
         if solve_match:
             return solve_match.group(1)
 
-        # case 2: direct equation
-        eq_match = re.search(r"([\w\*\+\-\^\(\)\s/]+=[\w\*\+\-\^\(\)\s/]+)", question)
+        # case 2: parse around '=' and keep only math-like segments.
+        if "=" in question:
+            left_raw, right_raw = question.rsplit("=", 1)
+
+            left = self._extract_math_side(left_raw, from_end=True)
+            right = self._extract_math_side(right_raw, from_end=False)
+
+            equation = f"{left}={right}".strip("=")
+            if re.search(r"[A-Za-z]", equation) and re.search(r"\d|\*|\+|\-|\^|/|\(|\)", equation):
+                return equation
+
+        # case 3: equation-like inline segment
+        eq_match = re.search(r"([A-Za-z0-9\*\+\-\^\(\)\./\s]*[A-Za-z]\d*[A-Za-z0-9\*\+\-\^\(\)\./\s]*=[A-Za-z0-9\*\+\-\^\(\)\./\s]+)", question)
         if eq_match:
-            return eq_match.group(1)
+            return eq_match.group(1).strip()
 
         return None
+
+    def _extract_math_side(self, text: str, from_end: bool) -> str:
+        """Extract likely math segment from one side of an equation."""
+        cleaned = text.strip()
+        if not cleaned:
+            return cleaned
+
+        # Candidate spans with math-safe chars.
+        candidates = re.findall(r"[A-Za-z0-9\(\)\[\]\{\}\*\+\-\^\./\s]+", cleaned)
+        candidates = [c.strip() for c in candidates if c.strip()]
+
+        def candidate_score(c: str) -> tuple:
+            math_chars = sum(ch.isdigit() or ch in "+-*/^()[]{}" for ch in c)
+            has_alpha = any(ch.isalpha() for ch in c)
+            has_operator = any(ch in "+-*/^" for ch in c)
+            has_paren = any(ch in "()" for ch in c)
+            return (math_chars, int(has_alpha), int(has_operator or has_paren), len(c))
+
+        best = ""
+        pool = candidates[::-1] if from_end else candidates
+        for cand in pool:
+            # Remove common non-math prompt words.
+            cand = re.sub(
+                r"\b(find|roots?|solve|equation|for|the|value|of|what|is|determine|please)\b",
+                " ",
+                cand,
+                flags=re.IGNORECASE,
+            )
+            cand = re.sub(r"\s+", " ", cand).strip(" :-,")
+            if not cand:
+                continue
+
+            if candidate_score(cand) > candidate_score(best):
+                best = cand
+
+            # Prefer concise trailing math-like tail for left side.
+            if from_end:
+                tail_match = re.search(r"([A-Za-z0-9\(\)\[\]\{\}\*\+\-\^\./\s]+)$", cand)
+                if tail_match:
+                    tail = tail_match.group(1).strip()
+                    if candidate_score(tail) > candidate_score(best):
+                        best = tail
+
+        return best or cleaned
 
     # -------------------------
     # Main solver
@@ -78,7 +143,12 @@ class SolverAgent:
 
         question = parsed_problem["problem_text"]
 
-        retrieved = self.retriever.retrieve(question, top_k=4)
+        retrieved = []
+        if self.retriever is not None:
+            try:
+                retrieved = self.retriever.retrieve(question, top_k=4)
+            except Exception:  # noqa: BLE001
+                retrieved = []
 
         retrieved_ctx = [
             {
@@ -106,10 +176,12 @@ class SolverAgent:
         if expr:
 
             normalized = self.normalize_expression(expr)
+            var_match = re.search(r"[a-zA-Z]", normalized)
+            solve_var = var_match.group(0) if var_match else "x"
 
             steps.append(f"Parsed equation: {normalized}")
 
-            res = solve_expression(normalized)
+            res = solve_expression(normalized, variable=solve_var)
 
             if res.success:
                 steps.append(f"Solved roots using SymPy: {res.output}")
