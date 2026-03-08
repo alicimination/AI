@@ -1,0 +1,12 @@
+streamlit
+openai
+langchain
+faiss-cpu
+sentence-transformers
+sympy
+paddleocr
+pytesseract
+openai-whisper
+python-dotenv
+numpy
+Pillow
