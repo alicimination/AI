@@ -51,7 +51,12 @@ math-mentor/
 │   ├── calculus.md
 │   ├── probability.md
 │   ├── linear_algebra.md
-│   └── pitfalls.md
+│   ├── pitfalls.md
+│   ├── combinatorics.md
+│   ├── sequences_series.md
+│   ├── trigonometry_basics.md
+│   ├── domain_constraints.md
+│   └── jee_problem_solving_patterns.md
 ├── utils/
 │   ├── prompts.py
 │   └── logging.py
@@ -80,7 +85,7 @@ Produces structured JSON:
 ```
 
 ### 3) RAG
-- KB markdown docs → chunking → sentence-transformer embeddings → FAISS storage.
+- KB markdown docs (10 files) → chunking → sentence-transformer embeddings → FAISS storage.
 - Retrieval top-k = 4.
 - UI shows retrieved sources and chunk content.
 - If no retrieval, app explicitly states no source found (no fabricated citations).

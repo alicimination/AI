@@ -21,6 +21,7 @@ class HITLManager:
         asr_conf: float | None = None,
         parser_needs_clarification: bool = False,
         verifier_uncertain: bool = False,
+        user_requested_recheck: bool = False,
         threshold: float = 0.72,
     ) -> HITLDecision:
         reasons: List[str] = []
@@ -32,4 +33,6 @@ class HITLManager:
             reasons.append("Parser detected ambiguity")
         if verifier_uncertain:
             reasons.append("Verifier uncertainty")
+        if user_requested_recheck:
+            reasons.append("User explicitly requested re-check")
         return HITLDecision(required=len(reasons) > 0, reasons=reasons)

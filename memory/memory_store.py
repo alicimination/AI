@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 DB_PATH = Path("memory/math_mentor.db")
 
@@ -80,6 +80,36 @@ class MemoryStore:
                 "INSERT INTO ocr_corrections (incorrect_text, corrected_text) VALUES (?, ?)",
                 (incorrect_text, corrected_text),
             )
+
+    def apply_correction_rules(self, raw_text: str, limit: int = 100) -> Tuple[str, List[Dict[str, str]]]:
+        """Apply known OCR/ASR correction rules at runtime before parsing."""
+        corrected = raw_text
+        applied: List[Dict[str, str]] = []
+
+        with self._conn() as con:
+            rows = con.execute(
+                """
+                SELECT incorrect_text, corrected_text
+                FROM ocr_corrections
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        for incorrect_text, corrected_text in rows:
+            if not incorrect_text or not corrected_text:
+                continue
+            if incorrect_text in corrected:
+                corrected = corrected.replace(incorrect_text, corrected_text)
+                applied.append(
+                    {
+                        "incorrect_text": incorrect_text,
+                        "corrected_text": corrected_text,
+                    }
+                )
+
+        return corrected, applied
 
     def get_recent(self, limit: int = 20) -> List[Dict[str, Any]]:
         with self._conn() as con:
