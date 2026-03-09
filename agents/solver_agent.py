@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from typing import Dict, List
-import re
 
 from rag.retriever import RAGRetriever
 from tools.python_math_tool import solve_expression, evaluate_expression
@@ -28,6 +29,37 @@ class SolverAgent:
         except Exception as exc:  # noqa: BLE001
             self.retriever = None
             self.retriever_error = str(exc)
+            
+        # Initialize pipeline placeholder (lazy loaded)
+        self.llm_pipeline = None
+
+    def _get_local_llm(self):
+        """Lazy loads the LLM to save memory until a word problem requires it."""
+        if self.llm_pipeline is not None:
+            return self.llm_pipeline
+
+        try:
+            from transformers import pipeline
+            import torch
+            
+            # Force downloads strictly to the project folder
+            local_dir = os.path.join(os.getcwd(), "local_models")
+            os.makedirs(local_dir, exist_ok=True)
+            
+            # Qwen 2.5 0.5B is tiny (~1GB), highly capable at math, and fast on CPU
+            model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+            
+            print(f"Loading local LLM ({model_id}) into {local_dir}...")
+            self.llm_pipeline = pipeline(
+                "text-generation",
+                model=model_id,
+                model_kwargs={"cache_dir": local_dir},
+                device="cpu", # Safe default. Change to "cuda:0" or "cuda" if you have an Nvidia GPU.
+            )
+            return self.llm_pipeline
+        except ImportError:
+            print("WARNING: 'transformers' or 'torch' not installed. LLM fallback disabled.")
+            return None
 
     # -------------------------
     # Expression normalization
@@ -171,7 +203,6 @@ class SolverAgent:
         if not text:
             return text
 
-        # FIX APPLIED HERE: Added '+' quantifier to the operator character class
         pattern = r"([A-Za-z]\d+|\d+[A-Za-z]|[A-Za-z0-9\)\]]\s*[\+\-\*\/\^]+\s*[A-Za-z0-9\(\[]|[A-Za-z]\s*\()"
 
         matches = list(re.finditer(pattern, text))
@@ -208,14 +239,14 @@ class SolverAgent:
         plan = [
             f"Use strategy: {strategy}",
             "Retrieve relevant formulas and pitfalls",
-            "Apply symbolic manipulation and compute answer",
+            "Apply symbolic manipulation or local LLM reasoning to compute answer",
         ]
 
         steps: List[str] = []
         answer = "Could not derive a final answer automatically."
 
         # --------------------------------
-        # Extract equation from question
+        # 1. Try Symbolic Extraction First
         # --------------------------------
 
         expr = self.extract_equation(question)
@@ -263,7 +294,7 @@ class SolverAgent:
         else:
 
             # --------------------------------
-            # Try simplify/evaluate problems
+            # 2. Try simplify/evaluate problems
             # --------------------------------
 
             eval_match = re.search(r"simplify\s*:\s*(.+)$", question.lower())
@@ -283,18 +314,59 @@ class SolverAgent:
                     answer = str(res.output)
 
         # --------------------------------
-        # fallback explanation
+        # 3. Fallback: Local LLM for Word Problems
         # --------------------------------
 
         if not steps:
+            llm = self._get_local_llm()
+            
+            if llm:
+                steps.append("Equation extraction failed. Initializing local LLM for word problem reasoning...")
+                context_text = "\n".join([f"- {c['content']}" for c in retrieved_ctx])
+                
+                # Format specific to Qwen Instruct models
+                prompt = f"""<|im_start|>system
+You are a concise math solver. Extract the final answer and provide brief steps separated by '|'.
+<|im_end|>
+<|im_start|>user
+Problem: {question}
 
-            steps.append(
-                "Used retrieved math context to build a conceptual solution path."
-            )
+Context:
+{context_text}
 
-            answer = (
-                "Please review the explanation and verify with HITL for final confidence."
-            )
+Respond exactly in this format:
+STEPS: <step 1> | <step 2> | <step 3>
+FINAL_ANSWER: <just the final number or fraction>
+<|im_end|>
+<|im_start|>assistant
+"""
+                try:
+                    # Generate response
+                    output = llm(prompt, max_new_tokens=200, return_full_text=False, temperature=0.1)
+                    llm_response = output[0]['generated_text'].strip()
+                    
+                    if "FINAL_ANSWER:" in llm_response:
+                        parts = llm_response.split("FINAL_ANSWER:")
+                        steps_raw = parts[0].replace("STEPS:", "").strip()
+                        answer_raw = parts[1].strip()
+                        
+                        parsed_steps = [s.strip() for s in steps_raw.split("|") if s.strip()]
+                        steps.extend(parsed_steps)
+                        answer = answer_raw
+                    else:
+                        steps.append(f"LLM Reasoning generated: {llm_response}")
+                        answer = "LLM did not format answer properly. Please review."
+                        
+                except Exception as e:
+                    steps.append(f"Local LLM failed: {str(e)}")
+                    answer = "Please review the explanation and verify with HITL for final confidence."
+            else:
+                steps.append(
+                    "Used retrieved math context to build a conceptual solution path. (Local LLM unavailable)"
+                )
+                answer = (
+                    "Please review the explanation and verify with HITL for final confidence."
+                )
 
         return SolverResult(
             plan=plan,
