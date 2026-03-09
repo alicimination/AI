@@ -81,6 +81,7 @@ class MemoryStore:
                 (incorrect_text, corrected_text),
             )
 
+
     def apply_correction_rules(self, raw_text: str, limit: int = 100) -> Tuple[str, List[Dict[str, str]]]:
         """Apply known OCR/ASR correction rules at runtime before parsing."""
         corrected = raw_text
@@ -132,3 +133,56 @@ class MemoryStore:
                 }
             )
         return out
+
+
+    # -----------------------------
+    # EXACT MATCH SEARCH
+    # -----------------------------
+    def get_exact_match(self, query: str):
+
+        """Return previously solved problem if exact match exists."""
+
+        with self._conn() as con:
+
+            row = con.execute(
+                """
+                SELECT
+                    original_input,
+                    parsed_problem,
+                    retrieved_context,
+                    solution,
+                    verification_result,
+                    user_feedback
+                FROM solved_problems
+                WHERE original_input = ?
+                LIMIT 1
+                """,
+                (query,),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        try:
+            parsed_problem = json.loads(row[1])
+        except Exception:
+            parsed_problem = row[1]
+
+        try:
+            retrieved_context = json.loads(row[2])
+        except Exception:
+            retrieved_context = row[2]
+
+        try:
+            verification_result = json.loads(row[4])
+        except Exception:
+            verification_result = row[4]
+
+        return {
+            "original_input": row[0],
+            "parsed_problem": parsed_problem,
+            "retrieved_context": retrieved_context,
+            "solution": row[3],
+            "verification_result": verification_result,
+            "user_feedback": row[5],
+        }
