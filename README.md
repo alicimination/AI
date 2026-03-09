@@ -1,51 +1,106 @@
 # Reliable Multimodal Math Mentor
 
-Production-style Streamlit application for **JEE-style math solving** with:
-- Multimodal input (**Text / Image / Audio**)
-- Multi-agent reasoning pipeline
-- Retrieval-Augmented Generation (RAG)
-- Human-in-the-loop controls
-- Persistent memory + similarity reuse
+A **production-style AI tutoring system** designed to solve **JEE-level mathematics problems** using **multimodal input**, **multi-agent reasoning**, **retrieval-augmented generation (RAG)**, and **symbolic mathematics tools**.
 
-## Architecture
+The system supports **text, image, and audio inputs**, processes them through a structured **AI reasoning pipeline**, verifies the solution, and generates **student-friendly explanations**.
 
-```text
-Input (Text/Image/Audio)
-  -> OCR/ASR extraction + user confirmation
-  -> Parser Agent (structured JSON)
-  -> Intent Router Agent (topic/strategy)
-  -> Solver Agent (RAG + SymPy tool)
-  -> Verifier Agent (checks + uncertainty)
-  -> Explainer Agent (student-friendly steps)
-  -> HITL gate + feedback
-  -> SQLite memory + similarity reuse
+---
+
+# Overview
+
+Reliable Multimodal Math Mentor is built to demonstrate a **robust AI architecture for math tutoring** rather than a simple LLM wrapper.
+
+The system combines:
+
+* Multimodal input processing
+* Structured problem parsing
+* Topic-aware reasoning
+* Knowledge-grounded retrieval
+* Symbolic math execution
+* Automated verification
+* Human-in-the-loop validation
+* Persistent learning via memory
+
+This architecture aims to **reduce hallucinations**, improve **solution reliability**, and provide **clear educational explanations**.
+
+---
+
+# System Architecture
+
+```
+User Input (Text / Image / Audio)
+        │
+        ▼
+OCR / ASR Extraction
+        │
+        ▼
+User Confirmation Layer
+        │
+        ▼
+Parser Agent
+(Structured Problem Representation)
+        │
+        ▼
+Intent Router Agent
+(Topic & Strategy Selection)
+        │
+        ▼
+Solver Agent
+(RAG + SymPy Math Tool)
+        │
+        ▼
+Verifier Agent
+(Logic + Consistency Checks)
+        │
+        ▼
+Explainer Agent
+(Student-Friendly Step-by-Step Explanation)
+        │
+        ▼
+Human-in-the-Loop Gate
+        │
+        ▼
+Memory Storage (SQLite)
+        │
+        ▼
+Similarity Search & Pattern Reuse
 ```
 
-## Project Structure
+---
 
-```text
+# Project Structure
+
+```
 math-mentor/
+│
 ├── app.py
+│
 ├── agents/
 │   ├── parser_agent.py
 │   ├── intent_router.py
 │   ├── solver_agent.py
 │   ├── verifier_agent.py
 │   └── explainer_agent.py
+│
 ├── rag/
 │   ├── ingest.py
 │   ├── retriever.py
 │   └── vector_store.py
+│
 ├── multimodal/
 │   ├── image_ocr.py
 │   └── audio_asr.py
+│
 ├── memory/
 │   ├── memory_store.py
 │   └── similarity_search.py
+│
 ├── tools/
 │   └── python_math_tool.py
+│
 ├── hitl/
 │   └── hitl_manager.py
+│
 ├── knowledge_base/
 │   ├── algebra.md
 │   ├── calculus.md
@@ -57,97 +112,296 @@ math-mentor/
 │   ├── trigonometry_basics.md
 │   ├── domain_constraints.md
 │   └── jee_problem_solving_patterns.md
+│
 ├── utils/
 │   ├── prompts.py
 │   └── logging.py
+│
 ├── requirements.txt
 └── README.md
 ```
 
-## Key Features
+---
 
-### 1) Multimodal Input
-- **Text**: direct problem input.
-- **Image**: multi-pass OCR via PaddleOCR + Tesseract fallback/ensemble, editable extraction box.
-- **Audio**: Whisper transcription + math phrase normalization + user confirmation.
+# Key Features
 
-### 2) Parser Agent Output
-Produces structured JSON:
+## Multimodal Problem Input
+
+The system accepts math problems through multiple modalities.
+
+### Text Input
+
+Users can directly type a math problem into the interface.
+
+### Image Input
+
+* Multi-pass OCR using **PaddleOCR**
+* Fallback/ensemble with **Tesseract**
+* Extracted text is shown in an **editable confirmation box**
+
+### Audio Input
+
+* Speech-to-text using **Whisper**
+* Math phrase normalization (example: "x squared" → `x^2`)
+* User confirmation before processing
+
+---
+
+# Parser Agent
+
+The parser converts raw input into a **structured mathematical problem representation**.
+
+Example output:
 
 ```json
 {
-  "problem_text": "...",
-  "topic": "probability",
+  "problem_text": "Solve x^2 + 2x = 0",
+  "topic": "algebra",
   "variables": ["x"],
-  "constraints": ["x > 0"],
+  "constraints": [],
   "needs_clarification": false
 }
 ```
 
-### 3) RAG
-- KB markdown docs (10 files) → chunking → sentence-transformer embeddings → FAISS storage.
-- Retrieval top-k = 4.
-- UI shows retrieved sources and chunk content.
-- If no retrieval, app explicitly states no source found (no fabricated citations).
+This structured format allows downstream agents to operate **reliably and consistently**.
 
-### 4) Multi-agent Pipeline
-1. Parser Agent
-2. Intent Router Agent
-3. Solver Agent
-4. Verifier Agent
-5. Explainer Agent
+---
 
-### 5) HITL Triggers
-- Low OCR confidence
-- Low ASR confidence
-- Parser ambiguity
-- Verifier uncertainty
-- User can recheck via incorrect feedback path
+# Retrieval-Augmented Generation (RAG)
 
-### 6) Memory + Self-learning
-SQLite stores:
-- original_input
-- parsed_problem
-- retrieved_context
-- solution
-- verification_result
-- user_feedback
-- timestamp
+The system retrieves relevant theory and strategies from a **local math knowledge base**.
 
-Similarity search retrieves similar solved problems to reuse patterns.
-OCR corrections are also stored.
+### Knowledge Sources
 
-## Setup
+The knowledge base includes curated markdown documents covering:
 
-```bash
+* Algebra
+* Calculus
+* Probability
+* Linear Algebra
+* Combinatorics
+* Sequences and Series
+* Trigonometry
+* Domain Constraints
+* Common Pitfalls
+* JEE Problem-Solving Patterns
+
+### Retrieval Pipeline
+
+1. Markdown documents are chunked
+2. Chunks are embedded using **sentence-transformers**
+3. Embeddings are stored in a **FAISS vector database**
+4. The top **4 most relevant chunks** are retrieved during solving
+
+The UI displays retrieved sources to maintain **transparency and grounding**.
+
+If no sources are retrieved, the system explicitly indicates that **no supporting source was found**.
+
+---
+
+# Multi-Agent Reasoning Pipeline
+
+The solving pipeline consists of multiple specialized agents:
+
+### Parser Agent
+
+Transforms raw input into structured problem data.
+
+### Intent Router Agent
+
+Determines the **topic and solving strategy**.
+
+### Solver Agent
+
+Uses:
+
+* retrieved knowledge (RAG)
+* symbolic math execution via **SymPy**
+
+### Verifier Agent
+
+Checks:
+
+* logical consistency
+* symbolic correctness
+* potential uncertainty
+
+If confidence is low, the system triggers **human-in-the-loop review**.
+
+### Explainer Agent
+
+Transforms the solution into **clear, student-friendly steps** suitable for learning.
+
+---
+
+# Human-in-the-Loop (HITL)
+
+The system includes safety gates that pause the pipeline when reliability may be compromised.
+
+Triggers include:
+
+* Low OCR confidence
+* Low ASR transcription confidence
+* Parser ambiguity
+* Verifier uncertainty
+* User marking an answer as incorrect
+
+Users can edit extracted text or request re-evaluation.
+
+---
+
+# Memory and Self-Learning
+
+Solved problems are stored in a **SQLite memory database**.
+
+Stored data includes:
+
+* original input
+* parsed problem structure
+* retrieved context
+* generated solution
+* verification results
+* user feedback
+* timestamp
+
+### Similarity Search
+
+When a new problem is submitted, the system searches for **similar past problems** to reuse solving patterns.
+
+### OCR Correction Learning
+
+User edits to OCR outputs are stored to improve future processing.
+
+---
+
+# Installation
+
+Clone the repository and install dependencies.
+
+```
+git clone <repository-url>
+cd math-mentor
+```
+
+Create a virtual environment:
+
+```
 python -m venv .venv
+```
+
+Activate it:
+
+Mac/Linux:
+
+```
 source .venv/bin/activate
+```
+
+Windows:
+
+```
+.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```
 pip install -r requirements.txt
 ```
 
-> Note: `sqlite3` is part of Python standard library and does not need separate installation.
+Note: `sqlite3` is included in Python and does not require installation.
 
-### Optional system dependencies
-- Tesseract binary (if using pytesseract fallback)
-- FFmpeg (recommended for Whisper audio handling)
+---
 
-## Run
+# Optional System Dependencies
 
-```bash
+Some multimodal features may require additional system tools.
+
+### Tesseract
+
+Used as an OCR fallback.
+
+Install from:
+
+https://github.com/tesseract-ocr/tesseract
+
+### FFmpeg
+
+Recommended for audio preprocessing when using Whisper.
+
+---
+
+# Running the Application
+
+Start the Streamlit interface:
+
+```
 streamlit run app.py
 ```
 
-## Deployment
+The app will open in your browser.
 
-Compatible with:
-- Streamlit Cloud
-- HuggingFace Spaces (Streamlit SDK)
+---
 
-For cloud deployment:
-1. Push repository.
-2. Set entrypoint to `app.py`.
-3. Ensure `requirements.txt` installs successfully.
+# Deployment
 
-## Notes
-- For best OCR/ASR quality, use clear images and noise-free audio.
-- Solver has symbolic automation and fallback explanations; verifier + HITL protects reliability.
+The application can be deployed on:
+
+* Streamlit Cloud
+* HuggingFace Spaces (Streamlit SDK)
+* Any Python hosting environment
+
+### Deployment Steps
+
+1. Push the repository to GitHub
+2. Ensure `requirements.txt` installs successfully
+3. Set the entrypoint to:
+
+```
+app.py
+```
+
+---
+
+# Design Goals
+
+The project prioritizes:
+
+* Reliability over raw generation
+* Knowledge-grounded reasoning
+* Clear educational explanations
+* Modular AI architecture
+* Extensibility for future research
+
+---
+
+# Future Improvements
+
+Possible extensions include:
+
+* LaTeX rendering for equations
+* Interactive whiteboard input
+* diagram interpretation
+* step-by-step verification using symbolic proofs
+* performance optimization for large-scale deployment
+* improved UI for classroom use
+
+---
+
+# License
+
+Add a license file if distributing publicly (MIT recommended for research projects).
+
+---
+
+# Acknowledgements
+
+This project builds on several open-source tools:
+
+* Streamlit
+* Sentence Transformers
+* FAISS
+* PaddleOCR
+* Tesseract
+* Whisper
+* SymPy
