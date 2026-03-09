@@ -43,10 +43,16 @@ def init_system():
 
 system = init_system()
 
+if "user_requested_recheck" not in st.session_state:
+    st.session_state.user_requested_recheck = False
+
 mode = st.sidebar.selectbox("Input Mode", ["Text", "Image", "Audio"])
 st.sidebar.markdown("### Pipeline Trace")
 trace_box = st.sidebar.empty()
 trace_lines = []
+if st.sidebar.button("🔁 Request Re-check (HITL)"):
+    st.session_state.user_requested_recheck = True
+    st.sidebar.info("Re-check request recorded. It will trigger HITL on next solve.")
 
 raw_text = ""
 ocr_conf = None
@@ -82,7 +88,11 @@ if st.button("Solve Problem", type="primary"):
         st.warning("Please provide a problem statement first.")
         st.stop()
 
-    parsed = system["parser"].run(raw_text).to_dict()
+    corrected_text, applied_rules = system["memory"].apply_correction_rules(raw_text)
+    if applied_rules:
+        trace_lines.append(f"Applied {len(applied_rules)} stored correction rule(s)")
+
+    parsed = system["parser"].run(corrected_text).to_dict()
     trace_lines.append("Parser Agent → completed")
 
     route = system["router"].run(parsed["topic"])
@@ -102,6 +112,7 @@ if st.button("Solve Problem", type="primary"):
         asr_conf=asr_conf,
         parser_needs_clarification=parsed["needs_clarification"],
         verifier_uncertain=verify_out.needs_hitl,
+        user_requested_recheck=st.session_state.user_requested_recheck,
     )
 
     explainer_out = system["explainer"].run(parsed, solver_out.plan, solver_out.steps, solver_out.final_answer)
@@ -113,6 +124,10 @@ if st.button("Solve Problem", type="primary"):
     with col1:
         st.subheader("Structured Parse")
         st.json(parsed)
+        if applied_rules:
+            st.caption("Applied correction rules before parsing:")
+            for rule in applied_rules:
+                st.write(f"- `{rule['incorrect_text']}` → `{rule['corrected_text']}`")
 
         st.subheader("Retrieved Context")
         if solver_out.retrieved_context:
@@ -182,6 +197,10 @@ if st.button("Solve Problem", type="primary"):
                 user_feedback=feedback,
             )
             st.success("Feedback saved to memory.")
+
+    if st.session_state.user_requested_recheck:
+        st.info("Re-check request has been honored in this run.")
+        st.session_state.user_requested_recheck = False
 
 st.divider()
 with st.expander("System Notes"):
